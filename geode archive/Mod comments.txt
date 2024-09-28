@@ -1,0 +1,571 @@
+#include <Geode/Geode.hpp>
+#include <Geode/utils/web.hpp>
+#include <GeodeUI.hpp>
+
+using namespace geode::prelude;
+
+//hi
+
+#define SETTING(type, key_name) Mod::get()->getSettingValue<type>(key_name)
+
+#define public_cast(value, member) \
+[](auto* v) { \
+	class FriendClass__; \
+	using T = std::remove_pointer<decltype(v)>::type; \
+	class FriendeeClass__: public T { \
+	protected: \
+		friend FriendClass__; \
+	}; \
+	class FriendClass__ { \
+	public: \
+		auto& get(FriendeeClass__* v) { return v->member; } \
+	} c; \
+	return c.get(reinterpret_cast<FriendeeClass__*>(v)); \
+}(value)
+
+class ghAccount {
+public:
+    inline static auto api_repo_url = std::string(
+        "https://api.github.com/repos/user95401/Geode-Mod-Comments"
+    );
+    inline static auto user = matjson::Value();
+    //define
+    static void try_load_user() {
+        if (user.contains("id")) return;
+        auto req = ghAccount::get_basic_web_request();
+        auto listener = new EventListener<web::WebTask>;
+        listener->bind(
+            [](web::WebTask::Event* e) {
+                if (web::WebResponse* res = e->getValue()) {
+                    auto json = res->json();
+                    auto string = res->string();
+                    if (json.has_value()) user = json.value();
+                }
+            }
+        );
+        listener->setFilter(req.send(
+            "GET",
+            "https://api.github.com/user"
+        ));
+    }
+    static std::string get_token() {
+        return Mod::get()->getSavedValue<std::string>("gh_access_token");
+    }
+    static void set_token(std::string token) {
+        Mod::get()->setSavedValue("gh_access_token", token);
+        Mod::get()->saveData();
+        user = matjson::Value();
+        try_load_user();
+    }
+    static bool has_token() {
+        return (get_token().size() > 3);
+    }
+    static web::WebRequest get_basic_web_request() {
+        auto req = web::WebRequest();
+        req.userAgent(Mod::get()->getID());
+        req.header("X-GitHub-Api-Version", "2022-11-28");
+        if (has_token()) req.header("Authorization", fmt::format("Bearer {}", get_token()));
+        return req;
+    }
+    static web::WebRequest* create_basic_web_request() {
+        auto req = new web::WebRequest();
+        req->userAgent(Mod::get()->getID());
+        req->header("X-GitHub-Api-Version", "2022-11-28");
+        if (has_token()) req->header("Authorization", fmt::format("Bearer {}", get_token()));
+        return req;
+    }
+};
+class GitHubAuthPopup : public FLAlertLayer, FLAlertLayerProtocol {
+public:
+    virtual void FLAlert_Clicked(FLAlertLayer* p0, bool p1) {
+        auto protocol = new GitHubAuthPopup;
+        //info"Continue"
+        if (p0->getID() == "info" and p1) {
+            //open auth apps idk
+            web::openLinkInBrowser("https://user95401.7m.pl/geode-mod-comments/auth");
+            //finish pop
+            auto pop = FLAlertLayer::create(
+                protocol,
+                "Authorization",
+                "Put code from gray page here:" "\n \n \n",
+                "Back", "Finish",
+                360.f
+            );
+            //input
+            auto input = TextInput::create(280.f, "the code");
+            input->setID("input");
+            input->setPositionY(42.f);
+            pop->m_buttonMenu->addChild(input);
+            //paste
+            auto paste = CCMenuItemSpriteExtra::create(
+                CCLabelBMFont::create(
+                    "paste\ntext",
+                    "chatFont.fnt"
+                ),
+                pop,
+                menu_selector(GitHubAuthPopup::onPasteToInput)
+            );
+            paste->setPositionY(90.f);
+            paste->setPositionX(-140.f);
+            pop->m_buttonMenu->addChild(paste);
+            //last popup setup
+            pop->setID("finish");
+            pop->show();
+        };
+        //finish"Finish"
+        if (p0->getID() == "finish" and p1) {
+            //code
+            auto code = std::string("");
+            auto input = dynamic_cast<TextInput*>(p0->getChildByIDRecursive("input"));
+            if (input) code = input->getString();
+            //
+            auto a = [this, protocol](matjson::Value const& catgirl) {
+                if (not catgirl.contains("access_token")) {
+                    auto asd = geode::createQuickPopup(
+                        "Failed getting token",
+                        catgirl.dump(),
+                        "Nah", nullptr, 420.f, nullptr, false
+                    );
+                    asd->show();
+                    return;
+                }
+                ghAccount::set_token(catgirl["access_token"].as_string());
+                if (auto githubitem = typeinfo_cast<CCMenuItemSpriteExtra*>(
+                    CCScene::get()->getChildByIDRecursive("githubitem"))) {
+                    githubitem->setOpacity(ghAccount::has_token() ? 120 : 255);
+                };
+                auto asd = geode::createQuickPopup(
+                    "Access token saved!",
+                    "Now u have no limits and able to create comments...",
+                    "OK", nullptr,
+                    nullptr
+                );
+                };
+            auto b = [this](std::string const& error)
+                {// something went wrong with our web request Q~Q
+                    auto message = error;
+                    auto asd = geode::createQuickPopup(
+                        "Request exception",
+                        message,
+                        "Nah", nullptr, 420.f, nullptr, false
+                    );
+                    asd->show();
+                };
+            auto req = web::WebRequest();
+            auto listener = new EventListener<web::WebTask>;
+            listener->bind(
+                [this, a, b](web::WebTask::Event* e) {
+                    if (web::WebResponse* res = e->getValue()) {
+                        std::string data = res->string().unwrapOr("");
+                        //json
+                        std::string error;
+                        auto json_val = matjson::parse(data, error);
+                        if (error.size() > 0) return b("Error parsing JSON: " + error);
+                        //call the some shit
+                        if (res->code() < 399) a(json_val);
+                        else b(data);
+                    }
+                }
+            );
+            req.header("Accept", "application/json");
+            req.bodyString(
+                fmt::format("code={}", code) +
+                "&" "client_id=Ov23lisVe58mXL4UNOsE"
+                "&" "client_secret=9a2f156940cd3464a07d941a38160fd6bdf3dd78"
+                //"&" ""
+            );
+            listener->setFilter(req.send("POST", "https://github.com/login/oauth/access_token"));
+        }
+        //back"Back"
+        if (p0->getID() == "finish" and not p1) {
+            show_info();
+        }
+    };
+    static void show_info() {
+        auto protocol = new GitHubAuthPopup;
+        auto pop = FLAlertLayer::create(
+            protocol,
+            "Authorization",
+            "<co>Authorize</c> your <cy>GitHub Account</c> to <cg>reduce</c> <cr>limits</c> and be <cg>able to create comments</c> in game.\nAfter click on the <co>\"Continue\" button</c> you will be <cr>redirected to</c> <cy>browser auth interfaces</c>.",
+            "Abort", "Continue",
+            360.f
+        );
+        pop->setID("info");
+        pop->show();
+    }
+    void onPasteToInput(CCObject* btnObj) {
+        auto btn = dynamic_cast<CCNode*>(btnObj);
+        auto menu = btn->getParent();
+        auto input = dynamic_cast<TextInput*>(menu->getChildByIDRecursive("input"));
+        input->setString(utils::clipboard::read());
+    };
+    void onOpenupBtn(CCObject*) {
+        show_info();
+    }
+};
+
+$on_mod(Loaded){ ghAccount::try_load_user(); }
+
+inline auto issues = matjson::Value();
+inline std::map<std::string, matjson::Value> mod_issues;
+inline std::map<std::string, matjson::Value> mod_comments;
+
+//ryzen code :D
+class IssueCommentItem : public CCLayer {
+public:
+    matjson::Value m_json;
+    static auto create(CCNode* parent, matjson::Value json) {
+        auto rtn = new IssueCommentItem();
+        rtn->m_json = json;
+        rtn->init();
+        rtn->customSetup(parent);
+        return rtn;
+    }
+    void customSetup(CCNode* parent) {
+        this->setContentWidth(parent->getContentWidth());
+
+        auto comment_user_id = m_json["user"]["id"].as_int();
+        auto loggedinuser_id = ghAccount::user.try_get<int>("id").value_or(0);
+        auto is_owner = (comment_user_id == loggedinuser_id);
+
+        auto padding = 8.f;
+
+        auto cell = CCNode::create();
+        cell->setContentWidth(parent->getContentWidth() - padding);
+
+        //react_row
+        if (m_json.contains("reactions")) {
+            auto react_row = CCMenu::create();
+            auto& reactions = m_json["reactions"];
+            auto onBtn = [reactions](CCMenuItemSpriteExtra* sender)
+                {
+                    auto tab = typeinfo_cast<GeodeTabSprite*>(sender->getNormalImage());
+                    auto should_delete = tab->m_selectedBG->isVisible();
+                    sender->setEnabled(0);
+                    auto req = ghAccount::get_basic_web_request();
+                    auto listener = new EventListener<web::WebTask>;
+                    listener->bind([tab, sender, should_delete](web::WebTask::Event* e)
+                        {
+                            if (web::WebResponse* res = e->getValue()) {
+                                sender->setEnabled(1);
+                                auto string = res->string();
+                                auto json = res->json().value_or(matjson::Value());
+                                if (res->code() < 399) {
+                                    tab->select(!should_delete);
+                                    sender->setTag(json.try_get<int>("id").value_or(sender->getTag()));
+                                    auto count = numFromString<int>(tab->m_label->getString()).value_or(1);
+                                    if (should_delete) --count; else ++count;
+                                    tab->m_label->setString(fmt::format("{}", count).data());
+                                }
+                            }
+                            else if (e->isCancelled()) {
+                                sender->setEnabled(1);
+                            }
+                        }
+                    );
+                    auto url = reactions.try_get<std::string>("url").value_or("");
+                    if (should_delete) {
+                        listener->setFilter(req.send(
+                            "DELETE", fmt::format("{}/{}", url, sender->getTag())
+                        ));
+                    }
+                    else {
+                        auto body = matjson::Value();
+                        body["content"] = sender->getID();
+                        req.bodyJSON(body);
+                        listener->setFilter(req.send(
+                            "POST", url
+                        ));
+                    };
+                };
+            auto addBtn = [reactions, react_row, onBtn](std::string name, std::string frame, std::string text = "")
+                {
+                    auto btnspr = GeodeTabSprite::create(
+                        frame.data(),
+                        (not text.empty() ? 
+                            text : string::replace(
+                                reactions[name].dump(), "\"", "")
+                            ).data(),
+                        52.f, 1
+                    );
+                    btnspr->select(0);
+                    btnspr->m_deselectedBG->setContentHeight(32.f);
+                    btnspr->m_selectedBG->setContentHeight(32.f);
+                    btnspr->m_label->setFntFile("gjFont17.fnt");
+                    btnspr->m_label->setScale(0.2f + btnspr->m_label->getScale());
+                    btnspr->setScale(0.6f);
+                    auto btn = CCMenuItemExt::createSpriteExtra(btnspr, onBtn);
+                    btn->setID(name.data());
+                    react_row->addChild(btn);
+                    return btn;
+                };
+            auto plus1 = addBtn("+1", "+1.png"_spr);
+            auto minus1 = addBtn("-1", "-1.png"_spr);
+            auto laugh = addBtn("laugh", "laugh.png"_spr);
+            auto confused = addBtn("confused", "confused.png"_spr);
+            auto heart = addBtn("heart", "heart.png"_spr);
+            auto hooray = addBtn("hooray", "hooray.png"_spr);
+            auto rocket = addBtn("rocket", "rocket.png"_spr);
+            auto eyes = addBtn("eyes", "eyes.png"_spr);
+            auto loading = LoadingSpinner::create(1.f);
+            react_row->addChild(loading, 0, 1);
+            react_row->setTouchEnabled(0);
+            react_row->setContentHeight(18.000f);//temp
+            react_row->setContentWidth(parent->getContentWidth());
+            react_row->setLayout(
+                RowLayout::create()
+                ->setAxisAlignment(AxisAlignment::Start)
+                ->setAutoScale(0)
+                ->setGrowCrossAxis(1)
+                ->setCrossAxisOverflow(0)
+            );
+            react_row->setContentHeight(20.000f);
+            cell->addChild(react_row);
+            cell->setContentHeight(react_row->getContentHeight() + cell->getContentHeight());
+            //loadthereactionsfk
+            std::function<void()> load;
+            auto listener = new EventListener<web::WebTask>;
+            auto bindfn = [reactions, load, react_row, loading, loggedinuser_id](web::WebTask::Event* e)
+                {
+                    if (web::WebResponse* res = e->getValue()) {
+                        auto json = res->json();
+                        auto string = res->string();
+                        if (res->code() < 399) if (json.has_value()) {
+                            auto val = json.value();
+                            if (val.is_array()) for (auto reaction : val.as_array()) {
+                                auto itsme = reaction["user"]["id"].as_int() == loggedinuser_id;
+                                auto name = reaction["content"].as_string();
+                                auto item = typeinfo_cast<CCMenuItemSpriteExtra*>(react_row->getChildByID(name));
+                                auto tab = typeinfo_cast<GeodeTabSprite*>(item->getNormalImage());
+                                if (itsme) tab->select(itsme);
+                                item->setTag(reaction["id"].as_int());//for delete
+                            };
+                            auto page = loading ? loading->getTag() : 1;
+                            loading->setTag(page + 1);
+                            if (json.value().as_array().size() < 100) {
+                                //final
+                                loading->removeFromParent();
+                                react_row->setTouchEnabled(1);
+                            }
+                            else load();
+                        }
+                    };
+                };
+            load = [listener, bindfn, reactions, loading]()
+                {
+                    auto req = ghAccount::get_basic_web_request();
+                    if (loading) req.param("page", loading->getTag());
+                    req.param("per_page", 100);
+                    listener->bind(bindfn);
+                    listener->setFilter(req.get(
+                        reactions.try_get<std::string>("url").value_or("")
+                    ));
+                };
+            load();
+        }
+
+        //cell row
+        auto row = CCMenu::create();
+        if (row) {
+            row->setLayout(
+                RowLayout::create()
+                ->setAxisAlignment(AxisAlignment::Start)
+                ->setCrossAxisLineAlignment(AxisAlignment::End)
+            );
+            row->setContentWidth(parent->getContentWidth());
+            //avatar
+            auto avatar_size = CCSize(30.f, 30.f);
+            {
+                //sprite
+                auto sprite = CCSprite::createWithSpriteFrameName("edit_eDamageSquare_001.png");
+                sprite->setScale(avatar_size.width / sprite->getContentSize().width);
+                //item
+                auto avatar = CCMenuItemSpriteExtra::create(sprite, this, menu_selector(IssueCommentItem::onAvatar));
+                avatar->m_animationEnabled = 0;
+                avatar->m_colorEnabled = 1;
+                avatar->setContentSize(avatar_size);
+                row->addChild(avatar);
+                //
+                auto filep = dirs::getTempDir() / ("." + m_json["user"]["login"].as_string());
+                auto a = [this, sprite, filep, avatar](std::monostate const& asd) {
+                    if (not sprite) return;
+                    sprite->initWithFile(filep.string().c_str());
+                    sprite->setScale(avatar->getContentWidth() / sprite->getContentSize().width);
+                    auto error_code = std::error_code();
+                    std::filesystem::remove(filep, error_code);
+                    };
+                auto req = web::WebRequest();
+                auto listener = new EventListener<web::WebTask>;
+                listener->bind(
+                    [this, a, filep](web::WebTask::Event* e) {
+                        if (web::WebResponse* res = e->getValue()) {
+                            std::string data = res->string().unwrapOr("");
+                            //call the some shit
+                            if (res->code() < 399) {
+                                res->into(filep);
+                                a(std::monostate());
+                            }
+                        }
+                    }
+                );
+                listener->setFilter(req.send("GET", m_json["user"]["avatar_url"].as_string()));
+            }
+            //text
+            if (auto text = CCNode::create()) {
+                row->addChild(text);
+                text->setLayout(
+                    ColumnLayout::create()
+                    ->setCrossAxisLineAlignment(AxisAlignment::Start)
+                    ->setAxisReverse(true)
+                    ->setGap(0.f)
+                );
+                text->setContentWidth(parent->getContentWidth() - avatar_size.width);
+                //menu user text
+                CCLabelBMFont* user;
+                MDTextArea* mdarea = MDTextArea::create(m_json["body"].as_string(), { text->getContentWidth(), 10 });
+                if (auto menu = CCMenu::create()) {
+
+                    //user
+                    user = CCLabelBMFont::create(
+                        fmt::format("{}", m_json["user"]["login"].as_string()).c_str(),
+                        "chatFont.fnt"
+                    );
+                    user->setScale(0.8f);
+                    user->setID("user");
+                    menu->addChild(user);
+
+                    //updated_at
+                    auto updated_at = m_json["updated_at"].as_string();
+                    updated_at = string::replace(updated_at, "T", " ");
+                    updated_at = string::replace(updated_at, "Z", "");
+                    updated_at = string::replace(updated_at, "-", ".");
+                    auto updated_at_label = CCLabelBMFont::create(
+                        fmt::format(" at {}", updated_at).c_str(),
+                        "chatFont.fnt"
+                    );
+                    updated_at_label->setScale(0.68f);
+                    updated_at_label->setOpacity(120);
+                    updated_at_label->setID("updated_at_label");
+                    menu->addChild(updated_at_label);
+
+                    menu->setContentHeight(user->getContentHeight());
+                    menu->setContentWidth(text->getContentWidth());
+                    menu->setLayout(
+                        RowLayout::create()
+                        ->setAxisAlignment(AxisAlignment::Start)
+                        ->setAutoScale(false)
+                        ->setCrossAxisOverflow(false)
+                        ->setGap(0.f)
+ 
+#include <Geode/Geode.hpp>
+#include <Geode/ui/GeodeUI.hpp>
+#include <Geode/ui/LoadingSpinner.hpp>
+#include <Geode/utils/ColorProvider.hpp>
+using namespace geode::prelude;
+
+//fucking bruh, export of this stuff when 
+
+class GeodeTabSprite : public CCNode {
+public:
+//protected:
+    CCScale9Sprite* m_deselectedBG;
+    CCScale9Sprite* m_selectedBG;
+    CCSprite* m_icon;
+    CCLabelBMFont* m_label;
+
+    bool init(const char* iconFrame, const char* text, float width, bool altColor) {
+        if (!CCNode::init())
+            return false;
+
+        const CCSize itemSize{ width, 35 };
+        const CCSize iconSize{ 18, 18 };
+
+        this->setContentSize(itemSize);
+        this->setAnchorPoint({ .5f, .5f });
+
+        m_deselectedBG = CCScale9Sprite::createWithSpriteFrameName("geode.loader/tab-bg.png");
+        m_deselectedBG->setScale(.8f);
+        m_deselectedBG->setContentSize(itemSize / .8f);
+        m_deselectedBG->setColor(ColorProvider::get()->color3b("geode.loader/mod-list-tab-deselected-bg"));
+        this->addChildAtPosition(m_deselectedBG, Anchor::Center);
+
+        m_selectedBG = CCScale9Sprite::createWithSpriteFrameName("geode.loader/tab-bg.png");
+        m_selectedBG->setScale(.8f);
+        m_selectedBG->setContentSize(itemSize / .8f);
+        m_selectedBG->setColor(to3B(ColorProvider::get()->color(
+            altColor ?
+            "geode.loader/mod-list-tab-selected-bg-alt" :
+            "geode.loader/mod-list-tab-selected-bg"
+        )));
+        this->addChildAtPosition(m_selectedBG, Anchor::Center);
+
+        m_icon = CCSprite::createWithSpriteFrameName(iconFrame);
+        limitNodeSize(m_icon, iconSize, 3.f, .1f);
+        this->addChildAtPosition(m_icon, Anchor::Left, ccp(16, 0), false);
+
+        m_label = CCLabelBMFont::create(text, "bigFont.fnt");
+        m_label->limitLabelWidth(this->getContentWidth() - 45, clamp(width * .0045f, .35f, .55f), .1f);
+        m_label->setAnchorPoint({ .5f, .5f });
+        this->addChildAtPosition(m_label, Anchor::Left, ccp((itemSize.width - iconSize.width) / 2 + iconSize.width, 0), false);
+
+        return true;
+    };
+
+//public:
+    static GeodeTabSprite* create(const char* iconFrame, const char* text, float width, bool altColor = false) {
+        auto ret = new GeodeTabSprite();
+        if (ret->init(iconFrame, text, width, altColor)) {
+            ret->autorelease();
+            return ret;
+        }
+        delete ret;
+        return nullptr;
+    };
+    void select(bool selected) {
+        m_deselectedBG->setVisible(!selected);
+        m_selectedBG->setVisible(selected);
+    };
+    void disable(bool disabled) {
+        auto color = disabled ? ccc3(95, 95, 95) : ccc3(255, 255, 255);
+        m_deselectedBG->setColor(color);
+        m_selectedBG->setColor(color);
+        m_icon->setColor(color);
+        m_label->setColor(color);
+    };
+};
+add_compile_definitions(GEODE_EXPOSE_SECRET_INTERNALS_IN_HEADERS_DO_NOT_DEFINE_PLEASE)
+cmake_minimum_required(VERSION 3.21)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
+
+project("main")
+
+if (NOT DEFINED ENV{GEODE_SDK})
+    message(FATAL_ERROR "Unable to find Geode SDK! Please define GEODE_SDK environment variable to point to Geode")
+else()
+    message(STATUS "Found Geode: $ENV{GEODE_SDK}")
+endif()
+
+# my bindings... https://github.com/user95401/bindings
+include("$ENV{GEODE_SDK}/cmake/CPM.cmake")
+CPMAddPackage(NAME "bindings"
+	GITHUB_REPOSITORY "user95401/bindings"
+	GIT_TAG "main"
+	DOWNLOAD_ONLY YES
+	NO_CACHE YES
+)
+
+set(GEODE_BINDINGS_REPO_PATH ${bindings_SOURCE_DIR})
+
+add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
+
+#mod
+
+file(GLOB_RECURSE SRC src/*.c*)
+add_library(${PROJECT_NAME} SHARED ${SRC} )
+message("SRC: ${SRC}")
+
+include_directories(src)
+
+setup_geode_mod(${PROJECT_NAME})
